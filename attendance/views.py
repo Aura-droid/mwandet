@@ -144,41 +144,42 @@ def take_attendance(request):
     return render(request, 'attendance/entry_form.html', context)
 
 @user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(is_teacher_or_mgmt)
 def submit_tod_report(request):
-    """Form for Teacher on Duty (TOD) to file daily compound reports."""
+    """
+    Handles the Daily TOD Report. 
+    Uses form.save() to automatically capture arrival_time, departure_time, 
+    maintenance_notes, and overall_comments.
+    """
     today = timezone.now().date()
-    tod_report_exists = DailyTODReport.objects.filter(date=today).exists()
+    # Check if a report already exists for today to allow updating instead of duplicating
+    existing_report = DailyTODReport.objects.filter(date=today).first()
 
     if request.method == 'POST':
-        form = TODReportForm(request.POST)
+        # If existing_report is found, 'instance' tells Django to UPDATE that specific row
+        form = TODReportForm(request.POST, instance=existing_report)
+        
         if form.is_valid():
-            teacher_name = form.cleaned_data['teacher_name']
+            report = form.save(commit=False)
+            report.date = today
+            report.submitted_by = request.user
             
-            DailyTODReport.objects.update_or_create(
-                date=today,
-                defaults={
-                    'submitted_by': request.user,
-                    'teacher_name': teacher_name,
-                    'maintenance_notes': form.cleaned_data.get('maintenance_notes', ''),
-                    'general_observations': form.cleaned_data.get('general_observations', ''),
-                }
-            )
+            # This save() call captures ALL fields from your modal:
+            # arrival_time, departure_time, maintenance_notes, overall_comments, etc.
+            report.save()
             
-            messages.success(request, f"SUCCESS: The TOD Daily Report for {today} has been filed/updated.")
+            messages.success(request, f"Daily TOD Report for {today} has been saved.")
             return redirect('teacher_hub') 
-    else:
-        existing_report = DailyTODReport.objects.filter(date=today).first()
-        if existing_report:
-            form = TODReportForm(instance=existing_report)
         else:
-            form = TODReportForm()
+            messages.error(request, "There was an error in the form. Please check your times.")
+    else:
+        form = TODReportForm(instance=existing_report)
 
     context = {
         'form': form,
-        'tod_report_exists': tod_report_exists,
-        'today': today
+        'today': today,
+        'is_update': existing_report is not None
     }
-    
     return render(request, 'attendance/tod_report_form.html', context)
 
 # --- MANAGEMENT DASHBOARD ---
