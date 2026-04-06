@@ -19,15 +19,21 @@ from django.urls import include, path
 from attendance import views
 from attendance.views import export_attendance_pdf, master_dashboard, take_attendance # Good, you have this
 from django.contrib.auth import views as auth_views
+from django.views.generic import RedirectView
 from django.conf import settings
 from django.conf.urls.static import static
 
 urlpatterns = [
     path('', views.home_redirect, name='home'),
+    path('manifest.webmanifest', views.web_manifest, name='web_manifest'),
+    path('offline/', views.offline_page, name='offline_page'),
+    path('service-worker.js', views.service_worker, name='service_worker'),
     path('admin/', admin.site.urls),
     path('entry/', take_attendance, name='take_attendance'),
     path('dashboard/', master_dashboard, name='master_dashboard'),
     path('export-pdf/', export_attendance_pdf, name='export_attendance_pdf'),
+    path('accounts/login/', RedirectView.as_view(url='/login/', permanent=False)),
+    path('accounts/logout/', RedirectView.as_view(url='/logout/', permanent=False)),
     path('accounts/', include('django.contrib.auth.urls')),
     # attendance/urls.py
     path('tod-report/', views.submit_tod_report, name='submit_tod_report'),
@@ -39,13 +45,18 @@ urlpatterns = [
     path('hub/results/', views.teacher_result_hub, name='teacher_result_hub'),
     path('hub/results/<int:template_id>/<int:subject_id>/', views.teacher_result_entry, name='teacher_result_entry'),
     path('hub/results/<int:template_id>/<int:subject_id>/autosave/', views.autosave_result_entry, name='autosave_result_entry'),
-    path('logout/', auth_views.LogoutView.as_view(http_method_names=['get', 'post', 'options'], next_page='login'), name='logout'),
+    path('hub/results/<int:template_id>/<int:subject_id>/analysis/', views.teacher_subject_analysis, name='teacher_subject_analysis'),
+    path('hub/results/<int:template_id>/<int:subject_id>/analysis/export/', views.export_teacher_subject_analysis_pdf, name='export_teacher_subject_analysis_pdf'),
+    path('logout/', auth_views.LogoutView.as_view(http_method_names=['get', 'post', 'options'], next_page='/login/'), name='logout'),
     path('export-weekly-truants-pdf/', views.export_weekly_truants_pdf, name='export_weekly_truants_pdf'),
     path('results/dashboard/', views.result_template_dashboard, name='result_template_dashboard'),
     path('results/<int:template_id>/', views.result_template_detail, name='result_template_detail'),
     path('results/<int:template_id>/status/', views.update_result_template_status, name='update_result_template_status'),
     path('results/<int:template_id>/export/', views.export_result_template_excel, name='export_result_template_excel'),
+    path('results/<int:template_id>/analysis/', views.result_template_analysis, name='result_template_analysis'),
+    path('results/<int:template_id>/analysis/export/', views.export_result_template_analysis_pdf, name='export_result_template_analysis_pdf'),
     path('results/<int:template_id>/missing-submissions/', views.export_missing_submissions_report, name='export_missing_submissions_report'),
+    path('results/<int:template_id>/delete/', views.delete_result_template, name='delete_result_template'),
 ]
 
 if settings.DEBUG:

@@ -20,6 +20,7 @@ from django.utils import timezone
 from django.http import FileResponse, HttpResponse, JsonResponse
 from django.template.loader import get_template
 from django.contrib.auth.decorators import user_passes_test, login_required
+from django.contrib.auth import logout
 from django.db.models.functions import Upper, TruncMonth
 from django.core.cache import cache
 from django.contrib.auth.models import User
@@ -30,7 +31,7 @@ from django.conf import settings
 from xhtml2pdf import pisa
 
 # --- Project Models & Forms ---
-from .excel_utils import build_export_workbook, export_filename_for_template
+from .excel_utils import build_export_workbook, export_filename_for_template, load_openpyxl
 from .forms import (
     AttendanceForm,
     ResultEntryBulkForm,
@@ -135,6 +136,171 @@ def filter_subject_rows(subject_rows, status_filter):
         return [row for row in subject_rows if row['status_label'] == 'Submitted']
     return subject_rows
 
+
+def extract_template_grade_rules(template):
+    load_workbook, _ = load_openpyxl()
+    workbook = load_workbook(template.workbook.path, data_only=False)
+    worksheet = workbook[template.sheet_name or workbook.sheetnames[0]]
+    score_column_rules = {}
+    lookup_pattern = re.compile(r"LOOKUP\(([A-Z]+)\d+,\$([A-Z]+)\$\d+:\$([A-Z]+)\$\d+\)")
+
+    for column_index in range(1, worksheet.max_column + 1):
+        cell = worksheet.cell(row=template.first_student_row, column=column_index)
+        formula = cell.value
+        if not isinstance(formula, str) or "LOOKUP(" not in formula.upper():
+            continue
+
+        match = lookup_pattern.search(formula.upper())
+        if not match:
+            continue
+
+        source_column, threshold_column, label_column = match.groups()
+        rules = []
+        row_number = 1
+        while row_number <= worksheet.max_row:
+            threshold = worksheet[f"{threshold_column}{row_number}"].value
+            label = worksheet[f"{label_column}{row_number}"].value
+            row_number += 1
+
+            if threshold in (None, "", "-") or label in (None, "", "-"):
+                continue
+
+            try:
+                numeric_threshold = float(threshold)
+            except (TypeError, ValueError):
+                continue
+
+            rules.append((numeric_threshold, str(label).strip().upper()))
+
+        if rules:
+            score_column_rules[source_column] = sorted(rules, key=lambda item: item[0])
+
+    return score_column_rules
+
+
+def grade_from_score(raw_score, rules=None):
+    score = (raw_score or '').strip().upper()
+    if not score:
+        return 'BLANK'
+    if score in {'ABS', 'INC'}:
+        return score
+    try:
+        numeric_score = float(score)
+    except ValueError:
+        return 'OTHER'
+
+    if rules:
+        selected_label = None
+        for threshold, label in rules:
+            if numeric_score >= threshold:
+                selected_label = label
+            else:
+                break
+        if selected_label:
+            return selected_label
+
+    # Fallback only if no template rules could be read.
+    if numeric_score >= 81:
+        return 'A'
+    if numeric_score >= 61:
+        return 'B'
+    if numeric_score >= 41:
+        return 'C'
+    if numeric_score >= 21:
+        return 'D'
+    return 'F'
+
+
+ANALYSIS_CATEGORIES = ['A', 'B', 'C', 'D', 'F', 'ABS', 'INC', 'BLANK']
+
+
+def build_single_subject_analysis(template, subject, final_only=False):
+    grade_rules_by_column = extract_template_grade_rules(template)
+    counts = {
+        'M': {category: 0 for category in ANALYSIS_CATEGORIES},
+        'F': {category: 0 for category in ANALYSIS_CATEGORIES},
+        'TOTAL': {category: 0 for category in ANALYSIS_CATEGORIES},
+    }
+
+    entries = ResultEntry.objects.filter(template=template, subject=subject).select_related('student')
+    if final_only:
+        entries = entries.filter(is_final=True)
+    entries = entries.order_by('student__candidate_no')
+
+    for entry in entries:
+        gender = (entry.student.sex or '').strip().upper()
+        category = grade_from_score(
+            entry.raw_score,
+            rules=grade_rules_by_column.get(entry.subject.column_letter),
+        )
+        if category not in ANALYSIS_CATEGORIES:
+            continue
+        if gender in {'M', 'F'}:
+            counts[gender][category] += 1
+        counts['TOTAL'][category] += 1
+
+    return {
+        'subject': subject,
+        'male': counts['M'],
+        'female': counts['F'],
+        'total': counts['TOTAL'],
+    }
+
+
+def build_subject_analysis_rows(template):
+    submitted_subjects = [
+        row['subject']
+        for row in build_subject_progress_rows(template)
+        if row['status_label'] == 'Submitted'
+    ]
+    analysis_rows = []
+
+    for subject in submitted_subjects:
+        analysis_rows.append(build_single_subject_analysis(template, subject, final_only=True))
+
+    return analysis_rows
+
+
+def analysis_has_data(analysis_row):
+    return any(analysis_row['total'][category] for category in ANALYSIS_CATEGORIES)
+
+
+def write_analysis_rows_csv(response, analysis_rows):
+    writer = csv.writer(response)
+    writer.writerow(['Subject', 'Gender', *ANALYSIS_CATEGORIES])
+    gender_rows = (
+        ('Male', 'male'),
+        ('Female', 'female'),
+        ('Total', 'total'),
+    )
+    for row in analysis_rows:
+        for gender_label, key in gender_rows:
+            writer.writerow(
+                [
+                    row['subject'].name,
+                    gender_label,
+                    *[row[key][category] for category in ANALYSIS_CATEGORIES],
+                ]
+            )
+
+
+def render_analysis_pdf_response(request, template, analysis_rows, title, subtitle, filename):
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'nauraicon2.jpg')
+    context = {
+        'template_obj': template,
+        'analysis_rows': analysis_rows,
+        'analysis_categories': ANALYSIS_CATEGORIES,
+        'report_title': title,
+        'report_subtitle': subtitle,
+        'logo_path': logo_path,
+        'user': request.user,
+    }
+    html = get_template('attendance/result_analysis_pdf.html').render(context)
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    pisa.CreatePDF(html, dest=response)
+    return response
+
 # --- HELPER: AI INSIGHTS ---
 
 def get_ai_insights(monthly_data, tod_notes):
@@ -175,6 +341,106 @@ def home_redirect(request):
     if request.user.is_authenticated:
         return login_success_redirect(request)
     return redirect('login')
+
+
+def logout_user(request):
+    logout(request)
+    return redirect('login')
+
+
+def web_manifest(request):
+    manifest = {
+        "name": "Naura Digital Initiative",
+        "short_name": "NDI Portal",
+        "start_url": "/",
+        "scope": "/",
+        "display": "standalone",
+        "background_color": "#f8f9fa",
+        "theme_color": "#0d6efd",
+        "description": "Naura Secondary staff portal for attendance, TOD reports, and academic templates.",
+        "icons": [
+            {
+                "src": f"{settings.STATIC_URL}assets/img/pwa-192.png",
+                "sizes": "192x192",
+                "type": "image/png",
+            },
+            {
+                "src": f"{settings.STATIC_URL}assets/img/pwa-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+            },
+            {
+                "src": f"{settings.STATIC_URL}assets/img/pwa-512.png",
+                "sizes": "512x512",
+                "type": "image/png",
+                "purpose": "maskable",
+            },
+        ],
+        "shortcuts": [
+            {
+                "name": "Teacher Hub",
+                "url": "/hub/",
+                "description": "Open the teacher hub quickly.",
+            },
+            {
+                "name": "Academic Office",
+                "url": "/results/dashboard/",
+                "description": "Open the academic office dashboard.",
+            },
+            {
+                "name": "Management",
+                "url": "/dashboard/",
+                "description": "Open the management dashboard.",
+            },
+        ],
+    }
+    return HttpResponse(json.dumps(manifest), content_type='application/manifest+json')
+
+
+def offline_page(request):
+    return render(request, 'attendance/offline.html')
+
+
+def service_worker(request):
+    offline_url = "/offline/"
+    icon_192 = f"{settings.STATIC_URL}assets/img/pwa-192.png"
+    icon_512 = f"{settings.STATIC_URL}assets/img/pwa-512.png"
+    js = f"""
+self.addEventListener('install', event => {{
+  event.waitUntil(
+    caches.open('ndi-portal-v1').then(cache => cache.addAll([
+      '{offline_url}',
+      '{icon_192}',
+      '{icon_512}'
+    ]))
+  );
+  self.skipWaiting();
+}});
+
+self.addEventListener('activate', event => {{
+  event.waitUntil(self.clients.claim());
+}});
+
+self.addEventListener('fetch', event => {{
+  if (event.request.method !== 'GET') {{
+    return;
+  }}
+
+  if (event.request.mode === 'navigate') {{
+    event.respondWith(
+      fetch(event.request).catch(() =>
+        caches.match('{offline_url}')
+      )
+    );
+    return;
+  }}
+
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
+  );
+}});
+"""
+    return HttpResponse(js, content_type='application/javascript')
 
 def login_success_redirect(request):
     """Debug version of the Traffic Cop to catch group name errors."""
@@ -328,6 +594,7 @@ def teacher_result_entry(request, template_id, subject_id):
         'form': form,
         'can_edit': can_edit,
         'subject_progress': subject_progress,
+        'analysis_available': analysis_has_data(build_single_subject_analysis(template, subject, final_only=False)),
     }
     return render(request, 'attendance/result_entry_form.html', context)
 
@@ -466,9 +733,10 @@ def master_dashboard(request):
     if current_hour >= 8: 
         log, created = NotificationLog.objects.get_or_create(date=today)
         if not log.sent:
-            send_staff_reminder("You are reminded to submit your attendence and/or T.O.D reports to N.D.I if you have not done so.")
-            log.sent = True
-            log.save()
+            reminder_result = send_staff_reminder("You are reminded to submit your attendence and/or T.O.D reports to N.D.I if you have not done so.")
+            if reminder_result.get('ok'):
+                log.sent = True
+                log.save()
     
     latest_report = DailyTODReport.objects.filter(date=today).first()
     recent_reports = DailyTODReport.objects.order_by('-date')[:5]
@@ -550,6 +818,7 @@ def master_dashboard(request):
         'next_day': next_day,
         'active_staff': active_staff,
         'result_templates': result_templates,
+        'has_truants': any(r.truant_names and r.truant_names != "None" for r in records),
     }
     return render(request, 'attendance/dashboard.html', context)
 
@@ -616,6 +885,10 @@ def result_template_detail(request, template_id):
     status_filter = request.GET.get('status', 'all')
     all_subject_rows = build_subject_progress_rows(template)
     subject_rows = filter_subject_rows(all_subject_rows, status_filter)
+    analysis_ready = (
+        template.status == ResultTemplateStatus.CLOSED
+        and any(row['status_label'] == 'Submitted' for row in all_subject_rows)
+    )
 
     status_form = ResultTemplateStatusForm(initial={'status': template.status})
     return render(
@@ -627,6 +900,7 @@ def result_template_detail(request, template_id):
             'status_form': status_form,
             'status_filter': status_filter,
             'all_subject_rows': all_subject_rows,
+            'analysis_ready': analysis_ready,
         },
     )
 
@@ -690,6 +964,111 @@ def export_missing_submissions_report(request, template_id):
         )
 
     return response
+
+
+@user_passes_test(is_results_office)
+def delete_result_template(request, template_id):
+    template = get_object_or_404(ResultTemplate, pk=template_id)
+    if request.method != 'POST':
+        return redirect('result_template_detail', template_id=template.id)
+
+    template_name = template.name
+    workbook_path = template.workbook.path if template.workbook else None
+    template.delete()
+
+    if workbook_path and os.path.exists(workbook_path):
+        try:
+            os.remove(workbook_path)
+        except OSError:
+            pass
+
+    messages.success(request, f'Template "{template_name}" was deleted successfully.')
+    return redirect('result_template_dashboard')
+
+
+@user_passes_test(is_results_office)
+def result_template_analysis(request, template_id):
+    template = get_object_or_404(ResultTemplate, pk=template_id)
+    if template.status != ResultTemplateStatus.CLOSED:
+        messages.error(request, "Analysis is only available after the template has been closed.")
+        return redirect('result_template_detail', template_id=template.id)
+
+    analysis_rows = build_subject_analysis_rows(template)
+    if not analysis_rows:
+        messages.error(request, "No fully submitted subjects are available for analysis yet.")
+        return redirect('result_template_detail', template_id=template.id)
+
+    return render(
+        request,
+        'attendance/result_template_analysis.html',
+        {
+            'template': template,
+            'analysis_rows': analysis_rows,
+        },
+    )
+
+
+@user_passes_test(is_results_office)
+def export_result_template_analysis_pdf(request, template_id):
+    template = get_object_or_404(ResultTemplate, pk=template_id)
+    if template.status != ResultTemplateStatus.CLOSED:
+        messages.error(request, "Analysis export is only available after the template has been closed.")
+        return redirect('result_template_detail', template_id=template.id)
+
+    analysis_rows = build_subject_analysis_rows(template)
+    if not analysis_rows:
+        messages.error(request, "No fully submitted subjects are available for analysis export yet.")
+        return redirect('result_template_detail', template_id=template.id)
+
+    return render_analysis_pdf_response(
+        request,
+        template,
+        analysis_rows,
+        title=f"{template.name} Subject Analysis",
+        subtitle="Submitted subjects split by gender using the template grading rules.",
+        filename=f"analysis_{template.id}.pdf",
+    )
+
+
+@user_passes_test(is_teacher_or_mgmt)
+def teacher_subject_analysis(request, template_id, subject_id):
+    template = get_object_or_404(ResultTemplate, pk=template_id)
+    subject = get_object_or_404(ResultTemplateSubject, pk=subject_id, template=template)
+    analysis_row = build_single_subject_analysis(template, subject, final_only=False)
+
+    if not analysis_has_data(analysis_row):
+        messages.error(request, "No saved marks are available for subject analysis yet.")
+        return redirect('teacher_result_entry', template_id=template.id, subject_id=subject.id)
+
+    return render(
+        request,
+        'attendance/result_subject_analysis.html',
+        {
+            'template': template,
+            'subject': subject,
+            'analysis_row': analysis_row,
+        },
+    )
+
+
+@user_passes_test(is_teacher_or_mgmt)
+def export_teacher_subject_analysis_pdf(request, template_id, subject_id):
+    template = get_object_or_404(ResultTemplate, pk=template_id)
+    subject = get_object_or_404(ResultTemplateSubject, pk=subject_id, template=template)
+    analysis_row = build_single_subject_analysis(template, subject, final_only=False)
+
+    if not analysis_has_data(analysis_row):
+        messages.error(request, "No saved marks are available for subject analysis export yet.")
+        return redirect('teacher_result_entry', template_id=template.id, subject_id=subject.id)
+
+    return render_analysis_pdf_response(
+        request,
+        template,
+        [analysis_row],
+        title=f"{subject.name} Subject Analysis",
+        subtitle="Current saved marks split by gender using the template grading rules.",
+        filename=f"subject_analysis_{template.id}_{subject.id}.pdf",
+    )
 
 # --- EXPORTS (MANAGEMENT ONLY) ---
 
