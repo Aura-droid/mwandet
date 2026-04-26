@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import csv
 from datetime import timedelta
@@ -74,7 +75,7 @@ def is_teacher_or_mgmt(user):
 
 def build_subject_progress_rows(template):
     total_students = template.students.count()
-    entry_queryset = ResultEntry.objects.filter(template=template).select_related('submitted_by', 'subject')
+    entry_queryset = ResultEntry.objects.filter(template=template).select_related('submitted_by')
     entry_summary = {
         row['subject_id']: row
         for row in (
@@ -137,7 +138,76 @@ def filter_subject_rows(subject_rows, status_filter):
     return subject_rows
 
 
+def build_single_subject_progress(template, subject):
+    total_students = template.students.count()
+    subject_entries = ResultEntry.objects.filter(template=template, subject=subject)
+    summary = subject_entries.aggregate(
+        entered_count=Count('id', filter=~Q(raw_score='')),
+        final_count=Count('id', filter=Q(is_final=True)),
+    )
+    latest_entry = subject_entries.select_related('submitted_by').order_by('-updated_at').first()
+
+    entered_count = summary.get('entered_count', 0) or 0
+    final_count = summary.get('final_count', 0) or 0
+
+    if total_students and final_count >= total_students:
+        status_label = "Submitted"
+        status_class = "success"
+    elif entered_count > 0:
+        status_label = "In Progress"
+        status_class = "warning"
+    else:
+        status_label = "Pending"
+        status_class = "danger"
+
+    return {
+        'subject': subject,
+        'entered_count': entered_count,
+        'final_count': final_count,
+        'total_students': total_students,
+        'status_label': status_label,
+        'status_class': status_class,
+        'pending_count': max(total_students - final_count, 0),
+        'latest_updated_at': latest_entry.updated_at if latest_entry else None,
+        'latest_updated_by': (
+            latest_entry.submitted_by.get_full_name() or latest_entry.submitted_by.username
+        )
+        if latest_entry and latest_entry.submitted_by
+        else "",
+    }
+
+
+def template_workbook_is_available(template):
+    workbook_field = getattr(template, 'workbook', None)
+    if not workbook_field:
+        return False
+
+    try:
+        workbook_path = workbook_field.path
+    except (ValueError, NotImplementedError):
+        return False
+
+    return bool(workbook_path and os.path.exists(workbook_path))
+
+
+def redirect_missing_template_workbook(request, template, fallback_url_name, **fallback_kwargs):
+    messages.error(
+        request,
+        f'The original workbook file for "{template.name}" is no longer available. '
+        'Please ask Academic Office to re-upload the template file.',
+    )
+    return redirect(fallback_url_name, **fallback_kwargs)
+
+
 def extract_template_grade_rules(template):
+    if not template_workbook_is_available(template):
+        return {}
+
+    cache_key = f"template_grade_rules:{template.id}:{template.updated_at.timestamp()}:{template.workbook.name}"
+    cached_rules = cache.get(cache_key)
+    if cached_rules is not None:
+        return cached_rules
+
     load_workbook, _ = load_openpyxl()
     workbook = load_workbook(template.workbook.path, data_only=False)
     worksheet = workbook[template.sheet_name or workbook.sheetnames[0]]
@@ -175,6 +245,7 @@ def extract_template_grade_rules(template):
         if rules:
             score_column_rules[source_column] = sorted(rules, key=lambda item: item[0])
 
+    cache.set(cache_key, score_column_rules, 60 * 60)
     return score_column_rules
 
 
@@ -265,6 +336,10 @@ def analysis_has_data(analysis_row):
     return any(analysis_row['total'][category] for category in ANALYSIS_CATEGORIES)
 
 
+def subject_has_saved_marks(template, subject):
+    return ResultEntry.objects.filter(template=template, subject=subject).exclude(raw_score='').exists()
+
+
 def write_analysis_rows_csv(response, analysis_rows):
     writer = csv.writer(response)
     writer.writerow(['Subject', 'Gender', *ANALYSIS_CATEGORIES])
@@ -284,8 +359,140 @@ def write_analysis_rows_csv(response, analysis_rows):
             )
 
 
+@user_passes_test(is_management)
+def export_attendance_pdf(request):
+    date_str = request.GET.get('date')
+    today = timezone.datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
+    records = AttendanceRecord.objects.filter(date=today).order_by('school_class')
+    
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'mwandeticon.jpg')
+    
+    grand_total = records.aggregate(
+        rb=Sum('total_boys_registered'), rg=Sum('total_girls_registered'),
+        b=Sum('present_boys'), g=Sum('present_girls'),
+        pb=Sum('permitted_boys'), pg=Sum('permitted_girls'),
+        tb=Sum('truant_boys'), tg=Sum('truant_girls')
+    )
+    for key in grand_total:
+        if grand_total[key] is None: grand_total[key] = 0
+
+    total_registered = grand_total['rb'] + grand_total['rg']
+    total_present = grand_total['b'] + grand_total['g']
+    total_truant = grand_total['tb'] + grand_total['tg']
+
+    if total_registered > 0:
+        school_attendance_pct = (total_present / total_registered) * 100
+        school_truancy_pct = (total_truant / total_registered) * 100
+    else:
+        school_attendance_pct = 0
+        school_truancy_pct = 0
+
+    context = {
+        'records': records, 
+        'grand_total': grand_total, 
+        'today': today, 
+        'school_name': 'Mwandet Secondary School', 
+        'logo_path': logo_path,
+        'school_attendance_pct': round(school_attendance_pct, 1),
+        'school_truancy_pct': round(school_truancy_pct, 1),
+        'user': request.user,
+    }
+
+    template = get_template('attendance/pdf_template.html')
+    html = template.render(context)
+
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="Attendance_Report_{today}.pdf"'
+    
+    pisa.CreatePDF(html, dest=response)
+    return response
+
+@user_passes_test(is_management)
+def export_tod_pdf(request, report_id):
+    report = DailyTODReport.objects.get(id=report_id)
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'mwandeticon.jpg')
+    context = {'report': report, 'school_name': 'Mwandet Secondary School', 'logo_path': logo_path, 'user': request.user}
+    html = get_template('attendance/pdf_template2.html').render(context)
+    
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="TOD_Report_{report.date}.pdf"'
+    
+    pisa.CreatePDF(html, dest=response)
+    return response
+
+@user_passes_test(is_management)
+def export_weekly_tod_summary(request):
+    date_str = request.GET.get('date')
+    active_date = timezone.datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
+    start = active_date - timedelta(days=active_date.weekday())
+    end = start + timedelta(days=6)
+    reports = DailyTODReport.objects.filter(date__range=[start, end]).order_by('date')
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'mwandeticon.jpg')
+    
+    context = {'reports': reports, 'start_date': start, 'end_date': end, 'school_name': 'MWANDET SECONDARY', 'logo_path': logo_path, 'user': request.user}
+    html = get_template('attendance/weekly_summary_pdf.html').render(context)
+    
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="Weekly_TOD_Summary_{start}_to_{end}.pdf"'
+    
+    pisa.CreatePDF(html, dest=response)
+    return response
+
+@user_passes_test(is_management)
+def export_weekly_truants_pdf(request):
+    today = timezone.now().date()
+    start_date = today - timedelta(days=7)
+    
+    records = AttendanceRecord.objects.filter(
+        date__range=[start_date, today]
+    ).order_by('school_class')
+
+    stats = {}
+    for r in records:
+        if r.truant_names and r.truant_names.lower() != "none":
+            names_list = [name.strip() for name in r.truant_names.split(',')]
+            for name in names_list:
+                if name:
+                    key = (name, r.school_class)
+                    stats[key] = stats.get(key, 0) + 1
+
+    report_data = []
+    for (name, s_class), count in stats.items():
+        report_data.append({
+            'name': name,
+            'class': s_class.upper(),
+            'total_missed': count
+        })
+
+    report_data = sorted(report_data, key=lambda x: (x['class'], x['name']))
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'mwandeticon.jpg')
+
+    context = {
+        'report_data': report_data,
+        'start_date': start_date,
+        'end_date': today,
+        'title': "WEEKLY TRUANCY SUMMARY",
+        'logo_path': logo_path,
+        'user': request.user
+    }
+
+    from django.template.loader import render_to_string
+    html_string = render_to_string('attendance/weekly_pdf_template.html', context)
+
+    response = HttpResponse(content_type='application/pdf')
+    filename = f"Weekly_Report_{timezone.now().date()}.pdf"
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    pisa_status = pisa.CreatePDF(html_string, dest=response)
+
+    if pisa_status.err:
+        return HttpResponse('We had some errors <pre>' + html_string + '</pre>')
+    
+    return response
+
+
 def render_analysis_pdf_response(request, template, analysis_rows, title, subtitle, filename):
-    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'nauraicon2.jpg')
+    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'mwandeticon.jpg')
     context = {
         'template_obj': template,
         'analysis_rows': analysis_rows,
@@ -301,18 +508,13 @@ def render_analysis_pdf_response(request, template, analysis_rows, title, subtit
     pisa.CreatePDF(html, dest=response)
     return response
 
-# --- HELPER: AI INSIGHTS ---
-
 def get_ai_insights(monthly_data, tod_notes):
     """Fetches and cleans insights for a professional dashboard UI."""
     try:
-        # THE FIX: Initialize the Gemini client properly
-        # We handle the SSL/Timeout issues by passing a custom config if needed, 
-        # but don't overwrite the 'client' variable with httpx.
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
         
         prompt = f"""
-        Analyze school data for Naura Secondary:
+        Analyze school data for Mwandet Digital:
         Attendance: {monthly_data}
         TOD Notes: {tod_notes}
         
@@ -322,7 +524,7 @@ def get_ai_insights(monthly_data, tod_notes):
         - Under 60 words. No conversational filler.
         """
         
-        # Use gemini-2.0-flash (most stable for NDI dashboard speed)
+        # Use gemini-2.5-flash (most stable for Mwandet dashboard speed)
         response = client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
         text = response.text
 
@@ -350,27 +552,27 @@ def logout_user(request):
 
 def web_manifest(request):
     manifest = {
-        "name": "Naura Digital Initiative",
-        "short_name": "NDI Portal",
+        "name": "Mwandet Digital Initiative",
+        "short_name": "Mwandet Portal",
         "start_url": "/",
         "scope": "/",
         "display": "standalone",
         "background_color": "#f8f9fa",
         "theme_color": "#0d6efd",
-        "description": "Naura Secondary staff portal for attendance, TOD reports, and academic templates.",
+        "description": "Mwandet Digital staff portal for attendance, TOD reports, and academic templates.",
         "icons": [
             {
-                "src": f"{settings.STATIC_URL}assets/img/pwa-192.png",
+                "src": f"{settings.STATIC_URL}assets/img/md-app-icon.png",
                 "sizes": "192x192",
                 "type": "image/png",
             },
             {
-                "src": f"{settings.STATIC_URL}assets/img/pwa-512.png",
+                "src": f"{settings.STATIC_URL}assets/img/md-app-icon.png",
                 "sizes": "512x512",
                 "type": "image/png",
             },
             {
-                "src": f"{settings.STATIC_URL}assets/img/pwa-512.png",
+                "src": f"{settings.STATIC_URL}assets/img/md-app-icon.png",
                 "sizes": "512x512",
                 "type": "image/png",
                 "purpose": "maskable",
@@ -408,7 +610,7 @@ def service_worker(request):
     js = f"""
 self.addEventListener('install', event => {{
   event.waitUntil(
-    caches.open('ndi-portal-v1').then(cache => cache.addAll([
+    caches.open('mwandet-portal-v1').then(cache => cache.addAll([
       '{offline_url}',
       '{icon_192}',
       '{icon_512}'
@@ -531,17 +733,19 @@ def teacher_result_entry(request, template_id, subject_id):
         ResultTemplate.objects.prefetch_related('students', 'subjects'),
         pk=template_id,
     )
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'teacher_result_hub')
+
     subject = get_object_or_404(ResultTemplateSubject, pk=subject_id, template=template)
-    students = list(template.students.all())
+    students = list(
+        template.students.only('id', 'candidate_no', 'row_number').order_by('row_number', 'candidate_no')
+    )
     existing_entries = {
         entry.student_id: entry
-        for entry in ResultEntry.objects.filter(template=template, subject=subject).select_related('student')
+        for entry in ResultEntry.objects.filter(template=template, subject=subject).only('student_id', 'raw_score', 'is_final')
     }
     can_edit = template.can_edit
-    subject_progress = next(
-        (row for row in build_subject_progress_rows(template) if row['subject'].id == subject.id),
-        None,
-    )
+    subject_progress = build_single_subject_progress(template, subject)
 
     if request.method == 'POST':
         form = ResultEntryBulkForm(request.POST)
@@ -594,7 +798,7 @@ def teacher_result_entry(request, template_id, subject_id):
         'form': form,
         'can_edit': can_edit,
         'subject_progress': subject_progress,
-        'analysis_available': analysis_has_data(build_single_subject_analysis(template, subject, final_only=False)),
+        'analysis_available': subject_has_saved_marks(template, subject),
     }
     return render(request, 'attendance/result_entry_form.html', context)
 
@@ -628,10 +832,7 @@ def autosave_result_entry(request, template_id, subject_id):
             },
         )
 
-    progress = next(
-        (row for row in build_subject_progress_rows(template) if row['subject'].id == subject.id),
-        None,
-    )
+    progress = build_single_subject_progress(template, subject)
     return JsonResponse(
         {
             'ok': True,
@@ -731,12 +932,18 @@ def master_dashboard(request):
     # Check if it's 11:00 AM or later (Tanzania time is UTC+3)
     # If your server is on UTC, 11:00 AM EAT is 08:00 AM UTC.
     if current_hour >= 8: 
-        log, created = NotificationLog.objects.get_or_create(date=today)
+        logs_for_today = NotificationLog.objects.filter(date=today).order_by('id')
+        log = logs_for_today.first()
+        if not log:
+            log = NotificationLog.objects.create(date=today)
+        elif logs_for_today.filter(sent=True).exists() and not log.sent:
+            log.sent = True
+            log.save(update_fields=['sent'])
         if not log.sent:
             reminder_result = send_staff_reminder("You are reminded to submit your attendence and/or T.O.D reports to N.D.I if you have not done so.")
             if reminder_result.get('ok'):
                 log.sent = True
-                log.save()
+                log.save(update_fields=['sent'])
     
     latest_report = DailyTODReport.objects.filter(date=today).first()
     recent_reports = DailyTODReport.objects.order_by('-date')[:5]
@@ -930,6 +1137,9 @@ def update_result_template_status(request, template_id):
 @user_passes_test(is_results_office)
 def export_result_template_excel(request, template_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'result_template_detail', template_id=template.id)
+
     workbook_stream = build_export_workbook(template)
     return FileResponse(
         workbook_stream,
@@ -989,6 +1199,9 @@ def delete_result_template(request, template_id):
 @user_passes_test(is_results_office)
 def result_template_analysis(request, template_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'result_template_detail', template_id=template.id)
+
     if template.status != ResultTemplateStatus.CLOSED:
         messages.error(request, "Analysis is only available after the template has been closed.")
         return redirect('result_template_detail', template_id=template.id)
@@ -1011,6 +1224,9 @@ def result_template_analysis(request, template_id):
 @user_passes_test(is_results_office)
 def export_result_template_analysis_pdf(request, template_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'result_template_detail', template_id=template.id)
+
     if template.status != ResultTemplateStatus.CLOSED:
         messages.error(request, "Analysis export is only available after the template has been closed.")
         return redirect('result_template_detail', template_id=template.id)
@@ -1033,6 +1249,9 @@ def export_result_template_analysis_pdf(request, template_id):
 @user_passes_test(is_teacher_or_mgmt)
 def teacher_subject_analysis(request, template_id, subject_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'teacher_result_hub')
+
     subject = get_object_or_404(ResultTemplateSubject, pk=subject_id, template=template)
     analysis_row = build_single_subject_analysis(template, subject, final_only=False)
 
@@ -1054,6 +1273,9 @@ def teacher_subject_analysis(request, template_id, subject_id):
 @user_passes_test(is_teacher_or_mgmt)
 def export_teacher_subject_analysis_pdf(request, template_id, subject_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
+    if not template_workbook_is_available(template):
+        return redirect_missing_template_workbook(request, template, 'teacher_result_hub')
+
     subject = get_object_or_404(ResultTemplateSubject, pk=subject_id, template=template)
     analysis_row = build_single_subject_analysis(template, subject, final_only=False)
 
@@ -1096,71 +1318,6 @@ def export_attendance_pdf(request):
     # --- CALCULATE PERCENTAGES ---
     total_registered = grand_total['rb'] + grand_total['rg']
     total_present = grand_total['b'] + grand_total['g']
-    total_truant = grand_total['tb'] + grand_total['tg']
-
-    if total_registered > 0:
-        school_attendance_pct = (total_present / total_registered) * 100
-        school_truancy_pct = (total_truant / total_registered) * 100
-    else:
-        school_attendance_pct = 0
-        school_truancy_pct = 0
-
-    context = {
-        'records': records, 
-        'grand_total': grand_total, 
-        'today': today, 
-        'school_name': 'Naura Secondary School', 
-        'logo_path': logo_path,
-        'school_attendance_pct': round(school_attendance_pct, 1), # Rounding for a clean PDF look
-        'school_truancy_pct': round(school_truancy_pct, 1),
-        'user': request.user, # Pass the user to the template for footer info
-    }
-
-    template = get_template('attendance/pdf_template.html')
-    html = template.render(context)
-
-    response = HttpResponse(content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="Attendance_Report_{today}.pdf"'
-    
-    pisa.CreatePDF(html, dest=response)
-    return response
-
-@user_passes_test(is_management)
-def export_tod_pdf(request, report_id):
-    report = DailyTODReport.objects.get(id=report_id)
-    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'nauraicon2.jpg')
-    context = {'report': report, 'school_name': 'Naura Secondary School', 'logo_path': logo_path, 'user': request.user}
-    html = get_template('attendance/pdf_template2.html').render(context)
-    
-    response = HttpResponse(content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="TOD_Report_{report.date}.pdf"'
-    
-    pisa.CreatePDF(html, dest=response)
-    return response
-
-@user_passes_test(is_management)
-def export_weekly_tod_summary(request):
-    date_str = request.GET.get('date')
-    active_date = timezone.datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
-    start = active_date - timedelta(days=active_date.weekday())
-    end = start + timedelta(days=6)
-    reports = DailyTODReport.objects.filter(date__range=[start, end]).order_by('date')
-    logo_path = os.path.join(settings.BASE_DIR, 'static', 'assets', 'img', 'nauraicon2.jpg')
-    
-    context = {'reports': reports, 'start_date': start, 'end_date': end, 'school_name': 'NAURA SECONDARY', 'logo_path': logo_path, 'user': request.user}
-    html = get_template('attendance/weekly_summary_pdf.html').render(context)
-    
-    response = HttpResponse(content_type='application/pdf')
-    response['Content-Disposition'] = f'attachment; filename="Weekly_TOD_Summary_{start}_to_{end}.pdf"'
-    
-    pisa.CreatePDF(html, dest=response)
-    return response
-
-@user_passes_test(is_management)
-def export_weekly_truants_pdf(request):
-    today = timezone.now().date()
-    start_date = today - timedelta(days=7)
-    
     records = AttendanceRecord.objects.filter(
         date__range=[start_date, today]
     ).order_by('school_class')

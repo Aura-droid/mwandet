@@ -24,8 +24,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 import os
 from dotenv import load_dotenv
 
-# Load the .env file
-load_dotenv()
+# Create a full path to the .env file
+env_path = BASE_DIR / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # Replace your hardcoded keys with these:
 SECRET_KEY = os.getenv('SECRET_KEY')
@@ -34,7 +35,7 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['nauradigitalinitiative.pythonanywhere.com', '127.0.0.1']
+ALLOWED_HOSTS = ['mwandetdigital.pythonanywhere.com', '127.0.0.1']
 
 
 # Application definition
@@ -56,6 +57,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'attendance.middleware.SchoolRoutingMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -72,6 +74,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'attendance.context_processors.active_school_context',
                 'attendance.context_processors.portal_roles',
             ],
         },
@@ -134,7 +137,7 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 # This tells Django to look in your app folders for a 'static' directory
 STATICFILES_DIRS = [
-    BASE_DIR / "static", 
+    BASE_DIR / "static",
 ]
 
 CACHES = {
@@ -147,5 +150,5 @@ CACHES = {
 # settings.py
 LOGIN_URL = 'login'
 # settings.py
-LOGIN_REDIRECT_URL = 'login_redirect'  
+LOGIN_REDIRECT_URL = 'login_redirect'
 LOGOUT_REDIRECT_URL = 'login'

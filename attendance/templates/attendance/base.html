@@ -4,17 +4,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Naura Secondary Portal</title>
+    <title>{% if active_school %}{{ active_school.name }} - {{ platform_name }}{% else %}{{ platform_name }}{% endif %}</title>
     <meta name="theme-color" content="#0d6efd">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <meta name="apple-mobile-web-app-title" content="NDI Portal">
+    <meta name="apple-mobile-web-app-title" content="{{ platform_name }}">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
-    <link rel="icon" href="{% static 'assets/img/nauraicon.jpg' %}" type="image/jpeg">
-    <link rel="apple-touch-icon" href="{% static 'assets/img/pwa-192.png' %}">
+    <link rel="icon" href="{% static platform_brand_logo %}" type="image/jpeg">
+    <link rel="apple-touch-icon" href="{% static 'assets/img/md-app-icon.png' %}">
     <link rel="manifest" href="{% url 'web_manifest' %}">
     <style>
+        html, body {
+            overflow-x: hidden;
+            -webkit-text-size-adjust: 100%;
+        }
+        body {
+            touch-action: pan-y;
+        }
+        .form-control,
+        .form-select,
+        input,
+        textarea,
+        select,
+        .ts-control {
+            font-size: 16px;
+        }
+        .card,
+        .alert,
+        .table-responsive,
+        .modal-content {
+            max-width: 100%;
+        }
         .ndi-hero {
             position: relative;
             height: 280px;
@@ -80,6 +101,13 @@
             height: auto;
             animation: pulse-glow 1.5s infinite ease-in-out;
         }
+        .loader-credit {
+            position: absolute;
+            bottom: 30px;
+            font-size: 0.85rem;
+            color: #6c757d;
+            letter-spacing: 0.5px;
+        }
         @keyframes pulse-glow {
             0% { transform: scale(0.9); opacity: 0.7; }
             50% { transform: scale(1.1); opacity: 1; filter: drop-shadow(0 0 10px rgba(0, 123, 255, 0.45)); }
@@ -88,6 +116,12 @@
         .loader-hidden {
             opacity: 0;
             visibility: hidden;
+        }
+        .app-footer {
+            padding: 2rem 0;
+            margin-top: 3rem;
+            border-top: 1px solid rgba(0,0,0,0.05);
+            background: #fff;
         }
         @media (max-width: 768px) {
             .ndi-hero {
@@ -99,21 +133,36 @@
             .portal-shell {
                 margin-top: -34px;
             }
+            .portal-nav {
+                border-radius: 14px;
+            }
+            main .container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            .btn-lg {
+                font-size: 1rem;
+                padding-top: 0.9rem;
+                padding-bottom: 0.9rem;
+            }
         }
     </style>
 </head>
 <body class="bg-light">
 <div id="loader">
-    <img src="{% static 'assets/img/nauraicon.svg' %}" alt="Naura Icon" class="loader-icon">
+    <div class="text-center">
+        <img src="{% static platform_brand_logo_no_bg %}" alt="{{ platform_brand_name }} Icon" class="loader-icon mb-3">
+        <div class="loader-credit">Powered by Naura Digital Initiative</div>
+    </div>
 </div>
 
 <header class="mb-4">
     <div class="ndi-hero shadow-sm">
-        <img src="{% static 'assets/img/naura.jpg' %}" class="ndi-hero-img" alt="Naura Students">
+        <img src="{% static platform_brand_banner %}" class="ndi-hero-img" alt="{{ platform_brand_name }} Banner">
         <div class="ndi-overlay-text text-white">
-            <div class="badge bg-warning text-dark mb-3 px-3 py-2">NDI System v1.0</div>
-            <h1 class="fw-bold text-uppercase tracking-tight">Naura Digital Initiative</h1>
-            <p class="lead d-none d-md-block mb-0">Quality and Excellence</p>
+            <div class="badge bg-warning text-dark mb-3 px-3 py-2">{{ platform_brand_short_name }} System v1.0</div>
+            <h1 class="fw-bold text-uppercase tracking-tight">{{ platform_brand_name }}</h1>
+            <p class="lead d-none d-md-block mb-0">Empowering Education Digitally</p>
         </div>
     </div>
 
@@ -156,11 +205,18 @@
     {% block content %}{% endblock %}
 </main>
 
+<footer class="app-footer">
+    <div class="container text-center">
+        <p class="text-muted small mb-0">&copy; {% now "Y" %} {{ platform_brand_name }}. All rights reserved.</p>
+        <p class="text-muted small">Powered by <span class="fw-semibold">Naura Digital Initiative</span></p>
+    </div>
+</footer>
+
 <div class="toast-container install-toast">
     <div id="installSuccessToast" class="toast align-items-center border-0 text-bg-success" role="status" aria-live="polite" aria-atomic="true">
         <div class="d-flex">
             <div class="toast-body">
-                <strong>App installed successfully.</strong> You can now open NDI Portal straight from your desktop.
+                <strong>App installed successfully.</strong> You can now open {{ platform_brand_short_name }} Portal straight from your desktop.
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
         </div>

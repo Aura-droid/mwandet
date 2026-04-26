@@ -4,8 +4,8 @@
 <div class="container d-flex justify-content-center align-items-center" style="min-height: 80vh;">
     <div class="card shadow-lg border-0" style="width: 100%; max-width: 400px; border-radius: 15px;">
         <div class="card-body p-5 text-center">
-            <h2 class="text-primary fw-bold mb-4">Naura Secondary</h2>
-            <p class="text-muted mb-4">Please log in to access the portal</p>
+            <h2 class="text-primary fw-bold mb-4">{{ school_display_name }}</h2>
+            <p class="text-muted mb-4">Log in to your Digital Workspace</p>
             
             <form method="post">
                 {% csrf_token %}

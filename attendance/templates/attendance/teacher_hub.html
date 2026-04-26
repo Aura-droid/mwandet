@@ -17,12 +17,12 @@
     {% if pending_result_templates %}
         <div class="alert alert-warning border-0 shadow-sm d-flex align-items-center justify-content-between flex-wrap gap-2">
             <div>
-                <strong>Academic office templates are still pending.</strong>
+                <strong>Academic office mark sheets are pending.</strong>
                 {% for item in pending_result_templates %}
                     <span class="d-block small">{{ item.template.name }}: {{ item.pending_count }} subject{{ item.pending_count|pluralize }} still need submission.</span>
                 {% endfor %}
             </div>
-            <a href="{% url 'teacher_result_hub' %}?status=pending" class="btn btn-sm btn-outline-dark">View Pending Subjects</a>
+            <a href="{% url 'teacher_result_hub' %}?status=pending" class="btn btn-sm btn-outline-dark">View Pending</a>
         </div>
     {% endif %}
 
@@ -42,7 +42,7 @@
     {% endif %}
 
     <div class="text-center mb-5">
-        <h2 class="fw-bold">Naura Staff Portal</h2>
+        <h2 class="fw-bold">{{ platform_brand_name }} Staff Portal</h2>
         <p class="text-muted">Select an action for today</p>
     </div>
 
@@ -107,7 +107,7 @@
                 <i class="bi bi-whatsapp me-1"></i> Text for Support
             </a>
         </p>
-        <p class="text-muted" style="font-size: 0.8rem;">System Version 1.0 | Naura Digital Initiative</p>
+        <p class="text-muted" style="font-size: 0.8rem;">System Version 1.0 | Powered by Naura Digital Initiative</p>
     </div>
 </div>
 {% endblock %}

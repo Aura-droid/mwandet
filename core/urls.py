@@ -47,7 +47,7 @@ urlpatterns = [
     path('hub/results/<int:template_id>/<int:subject_id>/autosave/', views.autosave_result_entry, name='autosave_result_entry'),
     path('hub/results/<int:template_id>/<int:subject_id>/analysis/', views.teacher_subject_analysis, name='teacher_subject_analysis'),
     path('hub/results/<int:template_id>/<int:subject_id>/analysis/export/', views.export_teacher_subject_analysis_pdf, name='export_teacher_subject_analysis_pdf'),
-    path('logout/', auth_views.LogoutView.as_view(http_method_names=['get', 'post', 'options'], next_page='/login/'), name='logout'),
+    path('logout/', views.logout_user, name='logout'),
     path('export-weekly-truants-pdf/', views.export_weekly_truants_pdf, name='export_weekly_truants_pdf'),
     path('results/dashboard/', views.result_template_dashboard, name='result_template_dashboard'),
     path('results/<int:template_id>/', views.result_template_detail, name='result_template_detail'),
