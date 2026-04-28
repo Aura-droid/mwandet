@@ -42,6 +42,8 @@ urlpatterns = [
     path('login/', auth_views.LoginView.as_view(template_name='attendance/login.html'), name='login'),
     path('login-check/', views.login_success_redirect, name='login_redirect'),
     path('hub/', views.teacher_hub, name='teacher_hub'),
+    path('tod-report/<int:report_id>/delete/', views.delete_tod_report, name='delete_tod_report'),
+    path('attendance/<int:record_id>/delete/', views.delete_attendance, name='delete_attendance'),
     path('hub/results/', views.teacher_result_hub, name='teacher_result_hub'),
     path('hub/results/<int:template_id>/<int:subject_id>/', views.teacher_result_entry, name='teacher_result_entry'),
     path('hub/results/<int:template_id>/<int:subject_id>/autosave/', views.autosave_result_entry, name='autosave_result_entry'),

@@ -682,6 +682,10 @@ def login_success_redirect(request):
 @login_required
 def teacher_hub(request):
     """Landing page for teachers to choose between Attendance or TOD tasks."""
+    today = timezone.now().date()
+    todays_tod_report = DailyTODReport.objects.filter(date=today).first()
+    todays_attendance = AttendanceRecord.objects.filter(date=today).order_by('school_class')
+
     open_templates = (
         ResultTemplate.objects.filter(status=ResultTemplateStatus.OPEN)
         .prefetch_related('subjects')
@@ -1299,4 +1303,30 @@ def export_teacher_subject_analysis_pdf(request, template_id, subject_id):
         subtitle="Current saved marks split by gender using the template grading rules.",
         filename=f"subject_analysis_{template.id}_{subject.id}.pdf",
     )
+
+
+
+@user_passes_test(can_access_staff_tools)
+def delete_tod_report(request, report_id):
+    if request.method == 'POST':
+        from django.shortcuts import get_object_or_404
+        report = get_object_or_404(DailyTODReport, id=report_id)
+        if report.date == timezone.now().date():
+            report.delete()
+            messages.success(request, "Today's TOD report has been deleted.")
+        else:
+            messages.error(request, "You can only delete today's report.")
+    return redirect('teacher_hub')
+
+@user_passes_test(can_access_staff_tools)
+def delete_attendance(request, record_id):
+    if request.method == 'POST':
+        from django.shortcuts import get_object_or_404
+        record = get_object_or_404(AttendanceRecord, id=record_id)
+        if record.date == timezone.now().date():
+            record.delete()
+            messages.success(request, f"Attendance record for {record.school_class} has been deleted.")
+        else:
+            messages.error(request, "You can only delete today's records.")
+    return redirect('teacher_hub')
 
