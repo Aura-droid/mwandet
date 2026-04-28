@@ -68,9 +68,12 @@ def is_results_office(user):
         or user.groups.filter(name__in=['Management', 'Academic Office']).exists()
     )
 
-def is_teacher_or_mgmt(user):
-    """Checks if the user is a Teacher, Management, or Superuser."""
-    return user.is_authenticated and (user.is_superuser or user.groups.filter(name__in=['Teachers', 'Management']).exists())
+def can_access_staff_tools(user):
+    """Checks if the user is a Teacher, Management, Academic Office, or Superuser."""
+    return user.is_authenticated and (
+        user.is_superuser 
+        or user.groups.filter(name__in=['Teachers', 'Management', 'Academic Office']).exists()
+    )
 
 
 def build_subject_progress_rows(template):
@@ -695,7 +698,7 @@ def teacher_hub(request):
     )
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def teacher_result_hub(request):
     status_filter = request.GET.get('status', 'all')
     templates = (
@@ -727,7 +730,7 @@ def teacher_result_hub(request):
     )
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def teacher_result_entry(request, template_id, subject_id):
     template = get_object_or_404(
         ResultTemplate.objects.prefetch_related('students', 'subjects'),
@@ -803,7 +806,7 @@ def teacher_result_entry(request, template_id, subject_id):
     return render(request, 'attendance/result_entry_form.html', context)
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def autosave_result_entry(request, template_id, subject_id):
     if request.method != 'POST':
         return JsonResponse({'ok': False, 'error': 'POST required.'}, status=405)
@@ -846,7 +849,7 @@ def autosave_result_entry(request, template_id, subject_id):
 
 # --- DATA ENTRY VIEWS ---
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def take_attendance(request):
     """Form for teachers to submit class attendance."""
     today = timezone.now().date()
@@ -882,7 +885,7 @@ def take_attendance(request):
     return render(request, 'attendance/entry_form.html', context)
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def submit_tod_report(request):
     """
     Handles the Daily TOD Report. 
@@ -1246,7 +1249,7 @@ def export_result_template_analysis_pdf(request, template_id):
     )
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def teacher_subject_analysis(request, template_id, subject_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
     if not template_workbook_is_available(template):
@@ -1270,7 +1273,7 @@ def teacher_subject_analysis(request, template_id, subject_id):
     )
 
 
-@user_passes_test(is_teacher_or_mgmt)
+@user_passes_test(can_access_staff_tools)
 def export_teacher_subject_analysis_pdf(request, template_id, subject_id):
     template = get_object_or_404(ResultTemplate, pk=template_id)
     if not template_workbook_is_available(template):

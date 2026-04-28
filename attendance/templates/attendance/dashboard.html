@@ -140,7 +140,7 @@
         </div>{% endif %}
     </div>
 
-    {% if not user.is_superuser and "Management" not in user.groups.all.0.name %}
+    {% if not can_access_management %}
     <div class="d-grid gap-2 d-md-flex justify-content-md-start mb-4">
         <a href="{% url 'submit_tod_report' %}" class="btn btn-warning shadow-sm">
             <i class="bi bi-clipboard-plus-fill me-2"></i>New TOD Report
@@ -315,7 +315,7 @@
                 <h5 class="mb-0 fw-bold text-dark">
                     <i class="bi bi-info-circle-fill text-primary me-2"></i>Today's School Status
                 </h5>
-                {% if not user.is_superuser and "Management" not in user.groups.all.0.name %}<a href="{% url 'submit_tod_report' %}" class="btn btn-sm btn-primary rounded-pill px-3 shadow-sm">
+                {% if not can_access_management %}<a href="{% url 'submit_tod_report' %}" class="btn btn-sm btn-primary rounded-pill px-3 shadow-sm">
                     <i class="bi bi-plus-lg"></i> File Report
                 </a>{% endif %}
             </div>
@@ -387,7 +387,7 @@
     <div class="col-md-5">
         <h6 class="fw-bold text-muted text-uppercase mb-3" style="font-size: 0.75rem; letter-spacing: 1px;">Admin Control Center</h6>
         <div class="row g-3">
-            {% if not user.is_superuser and "Management" not in user.groups.all.0.name %}<div class="col-12">
+            {% if not can_access_management %}<div class="col-12">
                 <a href="{% url 'submit_tod_report' %}" class="text-decoration-none card border-0 shadow-sm bg-primary text-white p-3 action-tile">
                     <div class="d-flex justify-content-between align-items-center">
                         <div>
