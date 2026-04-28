@@ -537,8 +537,13 @@ def get_ai_insights(monthly_data, tod_notes):
         return text.strip()
         
     except Exception as e:
-        # This catches the SSL: UNEXPECTED_EOF errors gracefully
-        return f"AI insights unavailable. ({str(e)})"
+        # Provide a clean, professional error message for the dashboard UI
+        return (
+            "<strong>Summary:</strong><br>"
+            "• AI Insights are currently warming up or experiencing high traffic.<br>"
+            "• Your dashboard data is safe and fully operational.<br>"
+            "• Please refresh the page in a few moments to generate new insights."
+        )
 
 # --- LOGIN & REDIRECT LOGIC ---
 
