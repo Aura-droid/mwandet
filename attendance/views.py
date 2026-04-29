@@ -613,15 +613,13 @@ def offline_page(request):
 
 def service_worker(request):
     offline_url = "/offline/"
-    icon_192 = f"{settings.STATIC_URL}assets/img/pwa-192.png"
-    icon_512 = f"{settings.STATIC_URL}assets/img/pwa-512.png"
+    app_icon = f"{settings.STATIC_URL}assets/img/md-app-icon.png"
     js = f"""
 self.addEventListener('install', event => {{
   event.waitUntil(
     caches.open('mwandet-portal-v1').then(cache => cache.addAll([
       '{offline_url}',
-      '{icon_192}',
-      '{icon_512}'
+      '{app_icon}'
     ]))
   );
   self.skipWaiting();
