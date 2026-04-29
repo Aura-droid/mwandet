@@ -213,10 +213,18 @@
 </footer>
 
 <div class="toast-container install-toast">
-    <div id="installSuccessToast" class="toast align-items-center border-0 text-bg-success" role="status" aria-live="polite" aria-atomic="true">
+    <div id="installSuccessToast" class="toast align-items-center border-0 text-bg-success mb-2" role="status" aria-live="polite" aria-atomic="true">
         <div class="d-flex">
             <div class="toast-body">
                 <strong>App installed successfully.</strong> You can now open {{ platform_brand_short_name }} Portal straight from your desktop.
+            </div>
+            <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+    </div>
+    <div id="ios-install-tip" class="toast align-items-center border-0 text-bg-info mb-2" role="status" aria-live="polite" aria-atomic="true" style="display: none;">
+        <div class="d-flex">
+            <div class="toast-body">
+                <i class="bi bi-apple me-2"></i><strong>iPhone User?</strong> Tap the <i class="bi bi-box-arrow-up mx-1"></i> (Share) button and select <strong>"Add to Home Screen"</strong> to install.
             </div>
             <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
         </div>
@@ -273,6 +281,20 @@
                 installSuccessToast.show();
             }
         });
+
+        // --- iOS Specific Logic ---
+        const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+        const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+        const isStandalone = ('standalone' in window.navigator) && (window.navigator.standalone);
+
+        if (isIOS && isSafari && !isStandalone) {
+            const iosTip = document.getElementById('ios-install-tip');
+            if (iosTip) {
+                iosTip.style.display = 'block';
+                const toast = new bootstrap.Toast(iosTip, { autohide: false });
+                toast.show();
+            }
+        }
     })();
 </script>
 </body>
