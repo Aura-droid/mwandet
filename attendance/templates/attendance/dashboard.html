@@ -256,7 +256,7 @@
                 <div class="card-body">
                     {% for record in records %}
                         {% if record.truant_names and record.truant_names != "None" %}
-                            <div class="p-2 mb-2 border-start border-danger border-3 bg-light">
+                            <div class="p-2 mb-2 border-start border-danger border-3 bg-light whatsapp-truant-row">
                                 <span class="fw-bold text-danger">{{ record.school_class|upper }}:</span> 
                                 <span class="text-dark">{{ record.truant_names }}</span>
                             </div>
@@ -618,7 +618,7 @@ function shareOnWhatsApp() {
     let today = "{{ today|date:'d/m/Y' }}";
     let message = "*M.D DAILY TRUANCY REPORT - " + today + "*\n\n";
     
-    const truantBlocks = document.querySelectorAll('.border-danger');
+    const truantBlocks = document.querySelectorAll('.whatsapp-truant-row');
     let hasTruants = false;
     
     truantBlocks.forEach(block => {
